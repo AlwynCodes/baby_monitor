@@ -1,27 +1,47 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.13.1)
 
-set(BOOK_REPO "C:/esp/book")
-set(RMAKER_PATH ${BOOK_REPO}/ch7/common/esp-rainmaker)
-set(SKAINET_PATH ${BOOK_REPO}/ch10/components/esp-skainet/components)
+set(MODEL_FOLDER ..)
+set(EI_SDK_FOLDER ../edge-impulse-sdk)
 
-set(EXTRA_COMPONENT_DIRS
-    ${SKAINET_PATH}/esp_codec_dev
-    ${SKAINET_PATH}/esp-dsp
-    ${SKAINET_PATH}/esp-sr
-    ${SKAINET_PATH}/hardware_driver
-    ${SKAINET_PATH}/sr_ringbuf
-    ${BOOK_REPO}/ch9/common/ch9_common
-    ${RMAKER_PATH}/components
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    MESSAGE("ESP-NN disabled (ESP32 target).")
+    add_definitions(-DEI_CLASSIFIER_TFLITE_ENABLE_ESP_NN=0)
+endif()
+
+OPTION(DEFINE_DEBUG
+    "Build the project using debugging code"
+    OFF)
+IF(DEFINE_DEBUG)
+    MESSAGE("Adding Debug flag...")
+    ADD_DEFINITIONS(-DDEBUG)
+    SET(CMAKE_BUILD_TYPE Debug)
+    MESSAGE("Build type is " ${CMAKE_BUILD_TYPE})
+ENDIF(DEFINE_DEBUG)
+
+set(include_dirs
+    ${MODEL_FOLDER}
+    ${MODEL_FOLDER}/tflite-model
+    ${MODEL_FOLDER}/model-parameters
+    ${EI_SDK_FOLDER}
 )
 
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(baby_monitor)
+include(${EI_SDK_FOLDER}/cmake/utils.cmake)
 
-idf_build_set_property(COMPILE_OPTIONS "-fdiagnostics-color=always" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-unused-variable" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-maybe-uninitialized" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-error=format=" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-unused-but-set-parameter" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-error=nonnull-compare" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-Wno-error=stringop-truncation" APPEND)
-idf_build_set_property(COMPILE_OPTIONS "-DEI_PORTING_ESPRESSIF=1" APPEND)
+RECURSIVE_FIND_FILE_EXCLUDE_DIR(SOURCE_FILES "../edge-impulse-sdk" "CMSIS" "*.cpp")
+RECURSIVE_FIND_FILE_EXCLUDE_DIR(MODEL_FILES "../tflite-model" "CMSIS" "*.cpp")
+RECURSIVE_FIND_FILE_EXCLUDE_DIR(CC_FILES "../edge-impulse-sdk" "CMSIS" "*.cc")
+RECURSIVE_FIND_FILE_EXCLUDE_DIR(S_FILES "../edge-impulse-sdk" "CMSIS" "*.s")
+RECURSIVE_FIND_FILE_EXCLUDE_DIR(C_FILES "../edge-impulse-sdk" "CMSIS" "*.c")
+
+list(APPEND SOURCE_FILES ${S_FILES})
+list(APPEND SOURCE_FILES ${C_FILES})
+list(APPEND SOURCE_FILES ${CC_FILES})
+list(APPEND SOURCE_FILES ${MODEL_FILES})
+
+idf_component_register(SRCS "main.cpp" "${SOURCE_FILES}"
+                       INCLUDE_DIRS "${include_dirs}"
+                       "../edge-impulse-sdk/porting/espressif/ESP-NN/include"
+                       "../edge-impulse-sdk/porting/espressif/ESP-NN/src/common"
+                       "../edge-impulse-sdk/porting/espressif/ESP-NN/tests/include")
+
+target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
