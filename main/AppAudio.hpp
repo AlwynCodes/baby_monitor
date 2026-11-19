@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstring>
+#include <cmath>
 #include <functional>
 
 #include "freertos/FreeRTOS.h"
@@ -162,6 +163,19 @@ namespace app
                 signal_t features_signal{get_data_fn, AUDIO_BUFFER_SIZE};
                 int result_idx{NOISE_IDX};
 
+                // Signal-level diagnostic: after the DC blocker, a microphone
+                // that is not connected/biased yields a flat (near-zero) buffer,
+                // while a working one shows a peak in the hundreds/thousands.
+                int peak{0};
+                double sumsq{0.0};
+                for (int i = 0; i < AUDIO_BUFFER_SIZE; ++i)
+                {
+                    const int v = o->m_snapshot[i] < 0 ? -o->m_snapshot[i] : o->m_snapshot[i];
+                    if (v > peak) peak = v;
+                    sumsq += static_cast<double>(o->m_snapshot[i]) * o->m_snapshot[i];
+                }
+                const float rms = static_cast<float>(sqrt(sumsq / AUDIO_BUFFER_SIZE));
+
                 if (run_classifier(&features_signal, &result) == EI_IMPULSE_OK)
                 {
                     for (uint16_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; ++i)
@@ -173,9 +187,10 @@ namespace app
                     }
                     if (EI_CLASSIFIER_LABEL_COUNT > NOISE_IDX)
                     {
-                        ESP_LOGI(TAG, "crying=%.2f noise=%.2f",
+                        ESP_LOGI(TAG, "crying=%.2f noise=%.2f peak=%d rms=%.0f",
                                  result.classification[CRYING_IDX].value,
-                                 result.classification[NOISE_IDX].value);
+                                 result.classification[NOISE_IDX].value,
+                                 peak, rms);
                     }
                 }
                 else
