@@ -57,7 +57,7 @@ list(APPEND SOURCE_FILES ${MODEL_FILES})
 # app_network_start) and replaces the old hand-written components/app_wifi.
 idf_component_register(SRCS "main.cpp" "${SOURCE_FILES}"
                        INCLUDE_DIRS "${include_dirs}"
-                       REQUIRES rmaker_app_network esp_rainmaker driver esp_timer nvs_flash)
+                       REQUIRES esp_rainmaker driver esp_timer nvs_flash esp_wifi esp_netif)
 
 # Compatibility with the vendored Edge Impulse SDK (written for IDF ~4.x):
 #  * portTICK_RATE_MS was removed from FreeRTOS in IDF 5.x; portTICK_PERIOD_MS

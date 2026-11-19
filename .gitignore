@@ -13,3 +13,6 @@ build_log.txt
 
 # Editor
 .vscode/
+
+# Real credentials - never commit
+main/secrets.h

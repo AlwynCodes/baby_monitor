@@ -95,6 +95,12 @@ namespace app
             float dc{2048.0f};
             float acc{0.0f};
             int phase{0};
+            // Raw ADC statistics, logged once a second. With the MAX4466
+            // disconnected/floating this shows min==max (a constant reading);
+            // a working mic shows a spread well beyond a few counts.
+            int rmin{4095}, rmax{0};
+            long rsum{0};
+            int rcount{0};
 
             while (true)
             {
@@ -110,7 +116,20 @@ namespace app
                 const int count = static_cast<int>(bytes / sizeof(uint16_t));
                 for (int i = 0; i < count; ++i)
                 {
-                    acc += static_cast<float>(raw[i] & 0x0FFF);
+                    const int rawv = static_cast<int>(raw[i] & 0x0FFF);
+                    if (rawv < rmin) rmin = rawv;
+                    if (rawv > rmax) rmax = rawv;
+                    rsum += rawv;
+                    if (++rcount >= I2S_SAMPLE_RATE)
+                    {
+                        ESP_LOGI(TAG, "raw adc: min=%d max=%d mean=%ld", rmin, rmax, rsum / rcount);
+                        rmin = 4095;
+                        rmax = 0;
+                        rsum = 0;
+                        rcount = 0;
+                    }
+
+                    acc += static_cast<float>(rawv);
                     if (++phase < OVERSAMPLE)
                     {
                         continue;
