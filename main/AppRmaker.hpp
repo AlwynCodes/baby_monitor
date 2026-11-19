@@ -47,7 +47,7 @@ namespace app
                 return;
             }
 
-            m_device = esp_rmaker_device_create("Cry sensor", "esp.device.sensor", (void *)this);
+            m_device = esp_rmaker_device_create("Cry sensor", "esp.device.other", (void *)this);
             if (m_device == nullptr)
             {
                 ESP_LOGE(TAG, "device create failed");
