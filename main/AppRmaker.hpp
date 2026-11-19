@@ -125,7 +125,7 @@ namespace app
             esp_rmaker_param_update_and_report(m_cry_param, esp_rmaker_bool(state));
             if (state)
             {
-                esp_rmaker_raise_alert("crying");
+                esp_rmaker_raise_alert("Baby Monitor Alert: Your baby is crying!");
             }
         }
     };
