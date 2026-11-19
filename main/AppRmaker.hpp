@@ -17,6 +17,7 @@
 #include <esp_rmaker_common_events.h>
 #include <esp_rmaker_utils.h>
 #include <esp_rmaker_mqtt.h>
+#include <esp_rmaker_on_network_chal_resp.h>
 
 namespace app
 {
@@ -66,7 +67,6 @@ namespace app
 
             esp_rmaker_node_add_device(m_rmaker_node, m_device);
         }
-
         void start()
         {
             if (m_rmaker_node == nullptr)
@@ -75,6 +75,43 @@ namespace app
                 return;
             }
             esp_rmaker_start();
+        }
+
+        // Starts the on-network challenge-response service. With
+        // CONFIG_ESP_RMAKER_ENABLE_CHALLENGE_RESPONSE=y this replaces the
+        // traditional user-node mapping flow: the RainMaker app (or CLI) finds
+        // the already-claimed node on the LAN via mDNS
+        // (_esp_rmaker_chal_resp._tcp) and maps it to the logged-in user
+        // account without re-claiming and without touching the fctry partition.
+        //
+        // Must be called AFTER esp_rmaker_node_init() (the service advertises
+        // the node id and needs it for mDNS) and BEFORE esp_rmaker_start().
+        void startOnNetworkChalResp()
+        {
+            if (m_rmaker_node == nullptr)
+            {
+                ESP_LOGW(TAG, "on-network chal-resp skipped: RainMaker not initialised");
+                return;
+            }
+
+            esp_rmaker_on_network_chal_resp_config_t cfg =
+                ESP_RMAKER_ON_NETWORK_CHAL_RESP_DEFAULT_CONFIG();
+            cfg.enable_mdns = true; // required for app/CLI discovery
+
+            esp_err_t err = esp_rmaker_on_network_chal_resp_start(&cfg);
+            if (err == ESP_OK)
+            {
+                ESP_LOGI(TAG, "on-network challenge-response started (port %u, sec %d, mdns)",
+                         (unsigned)cfg.port, (int)cfg.sec_ver);
+            }
+            else if (err == ESP_ERR_INVALID_STATE)
+            {
+                ESP_LOGW(TAG, "on-network challenge-response already running");
+            }
+            else
+            {
+                ESP_LOGE(TAG, "on-network challenge-response failed: %s", esp_err_to_name(err));
+            }
         }
 
         void update(bool state)

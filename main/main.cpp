@@ -61,6 +61,10 @@ extern "C" void app_main()
     //    spawns the MQTT client and reports node config.
     if (online)
     {
+        // Start the on-network challenge-response service before the agent:
+        // the RainMaker app/CLI then maps this already-claimed node to your
+        // user account over the LAN (no re-claiming, fctry untouched).
+        app_rmaker.startOnNetworkChalResp();
         app_rmaker.start();
     }
     app_driver.start();
