@@ -83,10 +83,14 @@ namespace app
         {
             // 12 uppercase hex chars, identical in form to what
             // esp_rmaker_populate_node_id() produces from the base MAC.
+            //
+            // Only ever seed when the key is completely ABSENT. A claimed
+            // device already holds its cloud-assigned node id here, and
+            // overwriting it would invalidate the claiming.
             size_t len = esp_rmaker_factory_get_size("node_id");
-            if (len >= 12)
+            if (len > 0)
             {
-                ESP_LOGI(TAG, "node_id already provisioned");
+                ESP_LOGI(TAG, "node_id already present, leaving it untouched");
                 return;
             }
 
@@ -116,10 +120,12 @@ namespace app
         {
             const char *key = CONFIG_APP_NETWORK_PROV_RANDOM_NVS_KEY;
 
+            // Absent-only, for the same reason as node_id: never disturb
+            // factory data that claiming may have written.
             size_t len = esp_rmaker_factory_get_size(key);
-            if (len >= 4)
+            if (len > 0)
             {
-                ESP_LOGI(TAG, "PoP random bytes already provisioned (%u bytes)", (unsigned)len);
+                ESP_LOGI(TAG, "PoP random bytes already present (%u bytes), leaving them", (unsigned)len);
                 return;
             }
 
