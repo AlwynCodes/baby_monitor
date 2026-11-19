@@ -1,6 +1,20 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# 4 MB flash layout: bootloader (0x0-0x8000), partition table (0x8000),
-# nvs (0x9000), phy_init (0xf000), 2 MB factory app from 0x10000.
+#
+# 4 MB flash (ESP32-D0WD-V3, confirmed with esptool flash_id).
+#
+# The `fctry` data/nvs partition is REQUIRED by ESP RainMaker: it is the
+# factory NVS partition named by CONFIG_ESP_RMAKER_FACTORY_PARTITION_NAME
+# (default "fctry"), and rmaker_app_network stores its provisioning PoP random
+# bytes in it too. Leaving it out gives, at boot:
+#   E esp_rmaker_fctry: NVS Flash init failed
+#   E esp_rmaker_core: Failed to initialise storage
+#   E esp_rmaker_node: Node or Device/Service handle cannot be NULL.
+#   E app_network: Failed to read random bytes from NVS to generate PoP.
+#   ESP_ERROR_CHECK failed: ESP_ERR_NO_MEM ... app_network_start()
+# ...followed by an abort()/reboot loop.
+#
+# An empty Offset means "place it automatically after the previous partition".
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x200000,
+fctry,    data, nvs,     ,        0x6000,

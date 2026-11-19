@@ -23,9 +23,10 @@ namespace app
     class AppRmaker
     {
     private:
-        esp_rmaker_node_t *m_rmaker_node;
-        esp_rmaker_device_t *m_device;
-        esp_rmaker_param_t *m_cry_param;
+        constexpr static const char *TAG{"rmaker"};
+        esp_rmaker_node_t *m_rmaker_node{nullptr};
+        esp_rmaker_device_t *m_device{nullptr};
+        esp_rmaker_param_t *m_cry_param{nullptr};
 
     public:
         void init()
@@ -35,11 +36,30 @@ namespace app
                 .enable_time_sync = true,
             };
             m_rmaker_node = esp_rmaker_node_init(&rainmaker_cfg, "Baby node", "esp.node.sensor");
+            // On a classic ESP32 the node cannot be created until the device is
+            // claimed (node id / MQTT params come from the factory partition).
+            // Everything below dereferences node handles, so bail out instead
+            // of building a half-initialised device.
+            if (m_rmaker_node == nullptr)
+            {
+                ESP_LOGE(TAG, "RainMaker node init failed - cloud reporting disabled until claimed");
+                return;
+            }
 
             m_device = esp_rmaker_device_create("Cry sensor", "esp.device.sensor", (void *)this);
+            if (m_device == nullptr)
+            {
+                ESP_LOGE(TAG, "device create failed");
+                return;
+            }
             esp_rmaker_device_add_param(m_device, esp_rmaker_name_param_create(ESP_RMAKER_DEF_NAME_PARAM, "Cry sensor"));
 
             m_cry_param = esp_rmaker_param_create("Baby crying", "esp.param.toggle", esp_rmaker_bool(false), PROP_FLAG_READ);
+            if (m_cry_param == nullptr)
+            {
+                ESP_LOGE(TAG, "param create failed");
+                return;
+            }
             esp_rmaker_param_add_ui_type(m_cry_param, ESP_RMAKER_UI_TOGGLE);
             esp_rmaker_device_add_param(m_device, m_cry_param);
             esp_rmaker_device_assign_primary_param(m_device, m_cry_param);
@@ -49,11 +69,22 @@ namespace app
 
         void start()
         {
+            if (m_rmaker_node == nullptr)
+            {
+                ESP_LOGW(TAG, "start() skipped: RainMaker not initialised");
+                return;
+            }
             esp_rmaker_start();
         }
 
         void update(bool state)
         {
+            if (m_cry_param == nullptr)
+            {
+                // Called from the audio task; must not dereference a NULL param.
+                ESP_LOGW(TAG, "crying=%d (RainMaker not initialised, not reported)", (int)state);
+                return;
+            }
             esp_rmaker_param_update_and_report(m_cry_param, esp_rmaker_bool(state));
             if (state)
             {

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_random.h"
 #include "sdkconfig.h"
 
 #pragma GCC diagnostic push
@@ -28,7 +29,27 @@ namespace app
 
         static constexpr int CRYING_IDX{0};
         static constexpr int NOISE_IDX{1};
-        static constexpr int AUDIO_BUFFER_SIZE{16000};
+
+        // The Edge Impulse model expects 16 kHz.
+        static constexpr int MODEL_SAMPLE_RATE{16000};
+
+        // Classic ESP32 I2S-ADC mode cannot produce 16 kHz directly. In
+        // i2s_calculate_adc_dac_clock() (i2s_legacy.c):
+        //     bclk = sample_rate * I2S_LL_AD_BCK_FACTOR   (factor = 2)
+        //     mclk = bclk * slot_bits                     (16-bit slot)
+        //     mclk_div = sclk / mclk,  sclk = 160 MHz
+        // and mclk_div must be < 256, so
+        //     160e6 / (sr * 2 * 16) < 256  =>  sr > 19,531 Hz
+        // 16 kHz therefore fails with "sample rate is too small, the mclk
+        // division exceed the maximum value 255". We capture at 2x and
+        // decimate by averaging pairs, which also gives a mild anti-alias
+        // filter.
+        static constexpr int OVERSAMPLE{2};
+        static constexpr int I2S_SAMPLE_RATE{MODEL_SAMPLE_RATE * OVERSAMPLE};
+
+        // 1 second of 16 kHz audio.
+        static constexpr int AUDIO_BUFFER_SIZE{MODEL_SAMPLE_RATE};
+
         static constexpr i2s_port_t I2S_PORT{I2S_NUM_0};
         // Classic ESP32 only: ADC1 channel 6 is GPIO34.
         static constexpr adc1_channel_t MIC_ADC_CHANNEL{ADC1_CHANNEL_6};
@@ -45,9 +66,7 @@ namespace app
         bool m_crying{false};
 
         // 32 KB per buffer. Prefer PSRAM when the board has it, otherwise fall
-        // back to internal RAM. The previous code used unchecked `new`, which
-        // would have produced a nullptr dereference inside the capture task if
-        // the allocation failed.
+        // back to internal RAM.
         static int16_t *alloc_samples()
         {
             const size_t bytes = AUDIO_BUFFER_SIZE * sizeof(int16_t);
@@ -73,6 +92,8 @@ namespace app
             AppAudio *o{static_cast<AppAudio *>(arg)};
             uint16_t raw[256];
             float dc{2048.0f};
+            float acc{0.0f};
+            int phase{0};
 
             while (true)
             {
@@ -88,7 +109,17 @@ namespace app
                 const int count = static_cast<int>(bytes / sizeof(uint16_t));
                 for (int i = 0; i < count; ++i)
                 {
-                    float s = static_cast<float>(raw[i] & 0x0FFF);
+                    acc += static_cast<float>(raw[i] & 0x0FFF);
+                    if (++phase < OVERSAMPLE)
+                    {
+                        continue;
+                    }
+                    // Decimate: average OVERSAMPLE raw samples into one 16 kHz
+                    // sample.
+                    float s = acc / static_cast<float>(OVERSAMPLE);
+                    acc = 0.0f;
+                    phase = 0;
+
                     dc += (s - dc) * 0.001f; // remove the MAX4466 DC bias
                     float v = (s - dc) * MIC_GAIN;
                     if (v > 32767.0f) v = 32767.0f;
@@ -184,7 +215,7 @@ namespace app
 
             i2s_config_t cfg = {};
             cfg.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN);
-            cfg.sample_rate = 16000;
+            cfg.sample_rate = I2S_SAMPLE_RATE;
             cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
             cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
             cfg.communication_format = I2S_COMM_FORMAT_STAND_MSB;
@@ -193,8 +224,6 @@ namespace app
             cfg.dma_buf_len = 256;
             cfg.use_apll = false;
 
-            // These were previously unchecked, so a failed driver install was
-            // followed by a busy-wait on a dead I2S peripheral.
             ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &cfg, 0, nullptr));
             ESP_ERROR_CHECK(i2s_set_adc_mode(ADC_UNIT_1, MIC_ADC_CHANNEL));
             // 12-bit samples at 11 dB attenuation: the 0 dB default clips the
@@ -203,6 +232,8 @@ namespace app
             ESP_ERROR_CHECK(adc1_config_channel_atten(MIC_ADC_CHANNEL, ADC_ATTEN_DB_11));
             ESP_ERROR_CHECK(i2s_adc_enable(I2S_PORT));
 
+            ESP_LOGI(TAG, "ADC mic ready: I2S %d Hz -> %d Hz model rate (decimate x%d), GPIO34",
+                     I2S_SAMPLE_RATE, MODEL_SAMPLE_RATE, OVERSAMPLE);
             m_ready = true;
         }
 
