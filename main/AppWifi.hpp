@@ -35,10 +35,13 @@ namespace app
             }
             else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED)
             {
-                // Retry until we get an IP.
+                const auto *ev = static_cast<wifi_event_sta_disconnected_t *>(data);
+                // Common reasons: 15 = 4WAY_HANDSHAKE_TIMEOUT (wrong password),
+                // 201 = NO_AP_FOUND (wrong SSID or 5 GHz-only AP),
+                // 204 = HANDSHAKE_TIMEOUT, 8 = ASSOC_LEAVE.
+                ESP_LOGW(TAG, "disconnected (reason %d), retrying...", ev->reason);
                 if (!(xEventGroupGetBits(self->m_events) & CONNECTED_BIT))
                 {
-                    ESP_LOGW(TAG, "disconnected, retrying...");
                     esp_wifi_connect();
                 }
             }

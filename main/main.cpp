@@ -28,7 +28,6 @@ extern "C" void app_main()
 
     app_mem.print();
     app_driver.init();
-    app_wifi.connect(); // credentials from main/secrets.h; non-fatal
     app_rmaker.init();
     app_audio.init([](bool crying)
                    { app_rmaker.update(crying); });
@@ -37,5 +36,7 @@ extern "C" void app_main()
     app_rmaker.start();
     app_driver.start();
     app_audio.start();
+    app_wifi.connect(); // credentials from main/secrets.h; non-fatal, audio already running
+
     app_mem.monitor();
 }
