@@ -1,3 +1,6 @@
+#include "nvs_flash.h"
+#include "esp_log.h"
+#include "app_network.h"
 
 #include "AppAudio.hpp"
 #include "AppDriver.hpp"
@@ -14,16 +17,26 @@ namespace
 
 extern "C" void app_main()
 {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
     app_mem.print();
     app_driver.init();
+    app_network_init();
     app_rmaker.init();
     app_audio.init([](bool crying)
-                    { app_rmaker.update(crying); });
+                   { app_rmaker.update(crying); });
 
     app_mem.print();
     app_rmaker.start();
     app_driver.start();
     app_audio.start();
-
     app_mem.monitor();
+
+    ESP_ERROR_CHECK(app_network_start(POP_TYPE_RANDOM)); // blocks until Wi-Fi is provisioned
 }

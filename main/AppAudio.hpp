@@ -2,13 +2,17 @@
 
 #include <cstring>
 #include <functional>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "sdkconfig.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcpp"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "driver/i2s.h"
 #include "driver/adc.h"
 #pragma GCC diagnostic pop
@@ -20,19 +24,49 @@ namespace app
     class AppAudio
     {
     private:
+        constexpr static const char *TAG{"audio"};
+
         static constexpr int CRYING_IDX{0};
         static constexpr int NOISE_IDX{1};
         static constexpr int AUDIO_BUFFER_SIZE{16000};
         static constexpr i2s_port_t I2S_PORT{I2S_NUM_0};
-        static constexpr adc1_channel_t MIC_ADC_CHANNEL{ADC1_CHANNEL_6}; // GPIO34
-        static constexpr float MIC_GAIN{16.0f}; // 12-bit ADC -> 16-bit range; tune if too quiet/loud
+        // Classic ESP32 only: ADC1 channel 6 is GPIO34.
+        static constexpr adc1_channel_t MIC_ADC_CHANNEL{ADC1_CHANNEL_6};
+        static constexpr float MIC_GAIN{16.0f}; // 12-bit ADC -> 16-bit range
+        static constexpr int CAPTURE_STACK_BYTES{4 * 1024};
+        static constexpr int ACTION_STACK_BYTES{8 * 1024};
 
         int16_t *m_ring{nullptr};
         int16_t *m_snapshot{nullptr};
         volatile int m_wptr{0};
+        bool m_ready{false};
 
         std::function<void(bool)> m_crying_fn;
         bool m_crying{false};
+
+        // 32 KB per buffer. Prefer PSRAM when the board has it, otherwise fall
+        // back to internal RAM. The previous code used unchecked `new`, which
+        // would have produced a nullptr dereference inside the capture task if
+        // the allocation failed.
+        static int16_t *alloc_samples()
+        {
+            const size_t bytes = AUDIO_BUFFER_SIZE * sizeof(int16_t);
+            int16_t *p{nullptr};
+
+            if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0)
+            {
+                p = static_cast<int16_t *>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            }
+            if (p == nullptr)
+            {
+                p = static_cast<int16_t *>(heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            }
+            if (p != nullptr)
+            {
+                memset(p, 0, bytes);
+            }
+            return p;
+        }
 
         static void captureTask(void *arg)
         {
@@ -43,8 +77,15 @@ namespace app
             while (true)
             {
                 size_t bytes{0};
-                i2s_read(I2S_PORT, raw, sizeof(raw), &bytes, portMAX_DELAY);
-                int count = bytes / sizeof(uint16_t);
+                esp_err_t err = i2s_read(I2S_PORT, raw, sizeof(raw), &bytes, portMAX_DELAY);
+                if (err != ESP_OK || bytes == 0)
+                {
+                    ESP_LOGW(TAG, "i2s_read failed: %s", esp_err_to_name(err));
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;
+                }
+
+                const int count = static_cast<int>(bytes / sizeof(uint16_t));
                 for (int i = 0; i < count; ++i)
                 {
                     float s = static_cast<float>(raw[i] & 0x0FFF);
@@ -76,7 +117,12 @@ namespace app
 
             while (true)
             {
-                int start = o->m_wptr;
+                // NOTE: this copy is lock-free and deliberately unsynchronised.
+                // The capture task (core 0) may wrap during the copy, which can
+                // only tear the newest few milliseconds of the snapshot. That is
+                // harmless for a 1 s audio classification window, and avoids
+                // holding a critical section for a 32 KB memcpy.
+                const int start = o->m_wptr;
                 for (int i = 0; i < AUDIO_BUFFER_SIZE; ++i)
                 {
                     o->m_snapshot[i] = o->m_ring[(start + i) % AUDIO_BUFFER_SIZE];
@@ -94,9 +140,16 @@ namespace app
                             result_idx = i;
                         }
                     }
-                    ESP_LOGI("audio", "crying=%.2f noise=%.2f",
-                             result.classification[CRYING_IDX].value,
-                             result.classification[NOISE_IDX].value);
+                    if (EI_CLASSIFIER_LABEL_COUNT > NOISE_IDX)
+                    {
+                        ESP_LOGI(TAG, "crying=%.2f noise=%.2f",
+                                 result.classification[CRYING_IDX].value,
+                                 result.classification[NOISE_IDX].value);
+                    }
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "classifier run failed");
                 }
 
                 if (result_idx == CRYING_IDX && !o->m_crying)
@@ -119,8 +172,15 @@ namespace app
         {
             m_crying_fn = f;
             m_crying = false;
-            m_ring = new int16_t[AUDIO_BUFFER_SIZE]();
-            m_snapshot = new int16_t[AUDIO_BUFFER_SIZE]();
+
+            m_ring = alloc_samples();
+            m_snapshot = alloc_samples();
+            if (m_ring == nullptr || m_snapshot == nullptr)
+            {
+                // Without buffers the capture task would fault.
+                ESP_LOGE(TAG, "not enough memory for %d-sample audio buffers", AUDIO_BUFFER_SIZE);
+                return;
+            }
 
             i2s_config_t cfg = {};
             cfg.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN);
@@ -133,15 +193,28 @@ namespace app
             cfg.dma_buf_len = 256;
             cfg.use_apll = false;
 
-            i2s_driver_install(I2S_PORT, &cfg, 0, nullptr);
-            i2s_set_adc_mode(ADC_UNIT_1, MIC_ADC_CHANNEL);
-            i2s_adc_enable(I2S_PORT);
+            // These were previously unchecked, so a failed driver install was
+            // followed by a busy-wait on a dead I2S peripheral.
+            ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &cfg, 0, nullptr));
+            ESP_ERROR_CHECK(i2s_set_adc_mode(ADC_UNIT_1, MIC_ADC_CHANNEL));
+            // 12-bit samples at 11 dB attenuation: the 0 dB default clips the
+            // MAX4466 output almost immediately.
+            ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));
+            ESP_ERROR_CHECK(adc1_config_channel_atten(MIC_ADC_CHANNEL, ADC_ATTEN_DB_11));
+            ESP_ERROR_CHECK(i2s_adc_enable(I2S_PORT));
+
+            m_ready = true;
         }
 
         void start(void)
         {
-            xTaskCreatePinnedToCore(captureTask, "capture", 4 * 1024, this, 6, nullptr, 0);
-            xTaskCreatePinnedToCore(actionTask, "action", 8 * 1024, this, 5, nullptr, 1);
+            if (!m_ready)
+            {
+                ESP_LOGE(TAG, "start() called before a successful init()");
+                return;
+            }
+            xTaskCreatePinnedToCore(captureTask, "capture", CAPTURE_STACK_BYTES, this, 6, nullptr, 0);
+            xTaskCreatePinnedToCore(actionTask, "action", ACTION_STACK_BYTES, this, 5, nullptr, 1);
         }
     };
 }

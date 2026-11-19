@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=5.3.0,<6.0.0"
+  espressif/esp_rainmaker: "^2.1.1"
+  espressif/rmaker_app_network: "^1.4.5"

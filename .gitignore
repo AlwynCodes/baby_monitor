@@ -1,0 +1,15 @@
+# Build output
+build/
+sdkconfig
+sdkconfig.old
+
+# Component manager scratch / backups
+dependencies.lock.bak
+dependencies.lock.v61.bak
+*.bak
+
+# Committed by mistake: captured console output, not a build artifact
+build_log.txt
+
+# Editor
+.vscode/

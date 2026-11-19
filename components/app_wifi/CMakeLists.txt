@@ -1,5 +1,0 @@
-idf_component_register(
-    SRCS "app_wifi.c"
-    INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_event esp_netif nvs_flash wifi_provisioning espressif__rmaker_common
-)
